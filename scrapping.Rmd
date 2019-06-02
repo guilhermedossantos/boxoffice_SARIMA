@@ -1,0 +1,121 @@
+---
+title: "scrapping bilheteria"
+subtitle: "Junto com alguns tratamentos"
+author: "Guilherme dos Santos"
+date: "1 de junho de 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(rvest)
+library(dplyr)
+library(readr)
+library(lubridate)
+library(purrr)
+library(forecast)
+```
+
+
+```{r funcao}
+scrapping_bilheteria <- function(i){
+
+  mojo <- paste0("https://www.boxofficemojo.com/monthly/?view=releasedate&chart=bymonth&month=",
+                as.character(i),
+                "&view=releasedate")
+    
+  box_office <- read_html(mojo)
+  
+  html_nodes(box_office, css = "center table") -> tabela
+  
+  tabela_boxoffice <- html_table(tabela, header = T)
+  
+  tabela_boxoffice <- tabela_boxoffice[[1]]
+  
+  tabela_boxoffice %>% 
+    rename(bilheteria = `Total Gross`, 
+           Ano = Year, 
+           filmes = Movies, 
+           media = Avg.) %>%
+    mutate(Mes = month.abb[i], 
+           bilheteria = parse_number(bilheteria), 
+           media = parse_number(media)) %>%
+    select(Ano, Mes, bilheteria, filmes, media) -> tabela_boxoffice
+  
+  tabela_boxoffice
+}
+
+
+```
+
+
+```{r}
+meses <- lapply(1:12, scrapping_bilheteria)
+
+meses <- reduce(meses, rbind.data.frame) 
+
+meses %>% 
+  mutate(Mes = ymd(paste0(Ano, "-", Mes, "-01"))) %>%
+  select(-Ano) %>% 
+  arrange(Mes) -> meses
+
+series <- ts(data = meses$bilheteria, start = c(1982,1), end = c(2019, 5), frequency = 12)
+monthplot(series)
+```
+
+```{r}
+boxplot(meses$bilheteria ~ month(meses$Mes))
+```
+
+
+```{r inclue = FALSE, eval = FALSE}
+# aa <- diff(series)
+# plot(aa)
+# acf(aa)
+# pacf(aa)
+# acf(aa, lag = 60)
+# pacf(aa, lag = 60)
+# aa <- diff(aa, lag = 12)
+# plot(aa)
+# acf(aa, lag = 60)
+# pacf(aa, lag = 60)
+# parece ser esse modelo
+modelo <- arima(series, order = c(0,1,1), seasonal = list(order = c(0,1,1), period = 12))
+```
+
+```{r}
+library(dygraphs)
+
+dygraph(series) %>% dyRangeSelector()
+```
+
+
+
+```{r}
+bdif <- diff(series)
+plot(bdif)
+acf(bdif, lag = 60)
+pacf(bdif, lag = 60)
+bdif <- diff(bdif, lag = 12)
+plot(bdif)
+acf(bdif, lag = 60)
+pacf(bdif, lag = 60)
+```
+
+
+  Aparentemente a parte não sazonal é um MA(1) (dps de uma diferença) e a parte sazonal é 1 MA 1 tbm com uma diferenca, então seria um $SARIMA(0,1,1)\times(0,1,1)_{12}$
+
+```{r}
+# separei de 2017 em diante para previsão
+parcela_estimacao <- window(series, start = 1982, c(2016, 12))
+modelo <- arima(parcela_estimacao, order = c(0,1,1), seasonal = list(order = c(0,1,1), period = 12))
+prev <- forecast(modelo)
+plot(prev)
+```
+
+## Resíduos
+```{r}
+residuos <- residuals(modelo)
+plot(residuos)
+acf(residuos)
+```
+
