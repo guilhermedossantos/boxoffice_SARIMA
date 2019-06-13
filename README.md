@@ -3,4 +3,4 @@ Aplicação de um modelo SARIMA na série temporal de bilheteria total mensal do
 
 Os dados são obtidos via webscrapping do site box office mojo, disponível em: https://www.boxofficemojo.com/
 
-
+A partir disso indentificamos um modelo ARIMA sazonal
