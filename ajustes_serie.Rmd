@@ -6,7 +6,7 @@ date: "1 de junho de 2019"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup}
 library(rvest)
 library(dplyr)
 library(readr)
@@ -16,7 +16,7 @@ library(forecast)
 ```
 
 
-```{r funcao}
+```{r funcao, eval = FALSE}
 scrapping_bilheteria <- function(i){
 
   mojo <- paste0("https://www.boxofficemojo.com/monthly/?view=releasedate&chart=bymonth&month=",
@@ -48,7 +48,7 @@ scrapping_bilheteria <- function(i){
 ```
 
 
-```{r}
+```{r eval = FALSE}
 meses <- lapply(1:12, scrapping_bilheteria)
 
 meses <- reduce(meses, rbind.data.frame) 
@@ -58,16 +58,87 @@ meses %>%
   select(-Ano) %>% 
   arrange(Mes) -> meses
 
-series <- ts(data = meses$bilheteria, start = c(1982,1), end = c(2019, 5), frequency = 12)
-monthplot(series)
+```
+
+
+```{r include = FALSE}
+load("meses.RData")
+
+series <- ts(data = meses$bilheteria[-nrow(meses)], start = c(1982,1), end = c(2019, 5), frequency = 12) #tirei junho que ainda não estava completo
 ```
 
 ```{r}
-boxplot(meses$bilheteria ~ month(meses$Mes))
+library(dygraphs)
+
+dygraph(series) %>% dyRangeSelector()
+```
+
+```{r}
+
+plot(series)
+```
+  
+  Vemos que a série apresenta tendência, pode não ficar claro que a série apresenta sazonalidade no gráfico devido ao grande número de observações.
+  
+  Vejamos os gráficos abaixo para averiguar a presença de sazonalidade.
+
+### Avaliação de sazonalidade
+```{r}
+boxplot((meses$bilheteria) ~ month(meses$Mes))
+```
+  
+  Aparentemente as distribuições são diferentes para os meses. Como a série tem tendência, é válido averiguar esse gráfico, e outros parecidos feitos com relação a série diferenciada.
+
+```{r}
+seried <- diff(series)
+monthplot(seried)
+```
+  
+```{r}
+boxplot(diff(meses$bilheteria) ~ month(meses$Mes)[-1])
+```
+  
+### Série diferenciada
+```{r}
+plot(seried)
+```
+  
+  Observando o gráfico da série diferenciada vemos que esta aparenta apresentar heterocedasticidade. Daí, faz-se necessária alguma transformação para estabilizar a variância.
+
+```{r}
+serie_sqrt <- sqrt(series)
+plot(serie_sqrt)
+```
+
+```{r}
+serie_sq_dif <- diff(serie_sqrt)
+plot(serie_sq_dif)
+```
+  
+  Agora a série aparenta ter variância constante.
+
+```{r}
+acf(serie_sq_dif, lag = 60)
+```
+    
+  Vemos a partir da função de autocorrelação que a parte sazonal é não estacionária, necessitando assim, da tomada de uma diferenciação sazonal.
+  
+```{r}
+serie_dif_s <- diff(serie_sq_dif, lag = 12)
+
+acf(serie_dif_s, lag = 60)
 ```
 
 
-```{r inclue = FALSE, eval = FALSE}
+```{r}
+pacf(serie_dif_s, lag = 60)
+```
+
+  Obeservando a função de autocorrelação e de autocorrelação parcial da série vemos que a autocorrelação é truncada em 1, tanto para a parte sazonal quanto para a não sazonal. E além disso, na função de autocorrelação parcial decresce exponencialmente para ambas
+  
+  Sugerindo, assim, que o modelo a ser utilizado é um $SARIMA(0,1,1)\times(0,1,1)_{12}$
+  
+```{r }
 # aa <- diff(series)
 # plot(aa)
 # acf(aa)
@@ -79,37 +150,34 @@ boxplot(meses$bilheteria ~ month(meses$Mes))
 # acf(aa, lag = 60)
 # pacf(aa, lag = 60)
 # parece ser esse modelo
-modelo <- arima(series, order = c(0,1,1), seasonal = list(order = c(0,1,1), period = 12))
+modelo <- arima(serie_sqrt, order = c(0,1,1), seasonal = list(order = c(0,1,1), period = 12))
 ```
+
+### Resíduos
+```{r}
+residuos <- residuals(modelo)
+plot(residuos)
+```
+  
+  Os resíduos não apresentam indícios de heterocedasticidade.
 
 ```{r}
-library(dygraphs)
-
-dygraph(series) %>% dyRangeSelector()
+acf(residuos)
 ```
+  
+  Ver essa autocorrelação significativa melhor
 
-
-
+### Previsão  
 ```{r}
-bdif <- diff(series)
-plot(bdif)
-acf(bdif, lag = 60)
-pacf(bdif, lag = 60)
-bdif <- diff(bdif, lag = 12)
-plot(bdif)
-acf(bdif, lag = 60)
-pacf(bdif, lag = 60)
+
 ```
-
-
-  Aparentemente a parte nao sazonal e um MA(1) (dps de uma diferenca) e a parte sazonal MA 1 tbm com uma diferenca, entao seria um $SARIMA(0,1,1)\times(0,1,1)_{12}$
 
 ### Previsao
 
 ```{r}
 # separei de 2017 em diante para previsao
 parcela_estimacao <- window(series, start = 1982, c(2016, 12))
-modelo <- arima(parcela_estimacao, order = c(0,1,1), seasonal = list(order = c(0,1,1), period = 12))
+modelo <- arima(sqrt(parcela_estimacao), order = c(0,1,1), seasonal = list(order = c(0,1,1), period = 12))
 prev <- forecast(modelo)
 plot(prev)
 ```
@@ -117,11 +185,18 @@ plot(prev)
 #### Comparacao da previsao com os valores observados
 
 ```{r}
-valor_prev <- prev$mean
+valor_prev <- prev$mean^2
 parcela_previsao <- window(series, start = c(2017,1), c(2018, 12))
 
 comparacao <- cbind.data.frame(parcela_previsao,valor_prev)
 comparacao
+```
+
+
+### MAPE
+```{r}
+MLmetrics::MAPE(comparacao$valor_prev, comparacao$parcela_previsao)
+mean((valor_prev - parcela_previsao)^2)
 ```
 
 ### Residuos
@@ -155,6 +230,9 @@ val_real <- window(series, start = c(2017,1), c(2018, 12))
 
 comp <- cbind.data.frame(val_real,val_prev)
 comp
+```
+```{r}
+MLmetrics::MAPE(val_prev, val_real)
 ```
 
 #### Residuos
