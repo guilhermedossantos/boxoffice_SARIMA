@@ -6,7 +6,9 @@ date: "1 de junho de 2019"
 output: html_document
 ---
 
-```{r setup}
+```{r setup, warning = FALSE, message = FALSE}
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 library(rvest)
 library(dplyr)
 library(readr)
