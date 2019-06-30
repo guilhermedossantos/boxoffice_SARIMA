@@ -6,7 +6,7 @@ date: "1 de junho de 2019"
 output: html_document
 ---
 
-```{r setup, warning = FALSE, message = FALSE}
+```{r setup, warning = FALSE, message = FALSE, include=FALSE}
 
 knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 library(rvest)
@@ -17,6 +17,13 @@ library(purrr)
 library(forecast)
 ```
 
+  O presente trabalho apresenta uma aplicação de um modelo SARIMA na série temporal de bilheteria total mensal doméstica nos EUA. Os dados são obtidos via webscrapping do site box office mojo, disponível em: https://www.boxofficemojo.com/.
+  
+  A série contém 450 observações, de janeiro de 1982 à junho de 2019.
+  
+  A partir disso, ajustamos um modelo ARIMA Sazonal e realizamos algumas comparações, com um modelo de suavização exponencial e com um modelo ajustado pela função do R auto.arima.
+
+## Série
 
 ```{r funcao, eval = FALSE}
 scrapping_bilheteria <- function(i){
@@ -69,6 +76,8 @@ load("meses.RData")
 series <- ts(data = meses$bilheteria[-nrow(meses)], start = c(1982,1), end = c(2019, 5), frequency = 12) #tirei junho que ainda não estava completo
 ```
 
+## Análise exploratória dos dados
+
 ```{r}
 library(dygraphs)
 
@@ -76,8 +85,8 @@ dygraph(series) %>% dyRangeSelector()
 ```
 
 ```{r}
-
-plot(series)
+#precisa disso novamente?
+#plot(series)
 ```
   
   Vemos que a série apresenta tendência, pode não ficar claro que a série apresenta sazonalidade no gráfico devido ao grande número de observações.
@@ -107,6 +116,8 @@ plot(seried)
   
   Observando o gráfico da série diferenciada vemos que esta aparenta apresentar heterocedasticidade. Daí, faz-se necessária alguma transformação para estabilizar a variância.
 
+### Transformação para estabilizar a variância
+
 ```{r}
 serie_sqrt <- sqrt(series)
 plot(serie_sqrt)
@@ -118,6 +129,8 @@ plot(serie_sq_dif)
 ```
   
   Agora a série aparenta ter variância constante.
+
+### Função de autocorrelação
 
 ```{r}
 acf(serie_sq_dif, lag = 60)
@@ -131,28 +144,22 @@ serie_dif_s <- diff(serie_sq_dif, lag = 12)
 acf(serie_dif_s, lag = 60)
 ```
 
+### Função de autocorrelação parcial
 
 ```{r}
 pacf(serie_dif_s, lag = 60)
 ```
 
-  Obeservando a função de autocorrelação e de autocorrelação parcial da série vemos que a autocorrelação é truncada em 1, tanto para a parte sazonal quanto para a não sazonal. E além disso, na função de autocorrelação parcial decresce exponencialmente para ambas
+  Obeservando a função de autocorrelação e de autocorrelação parcial da série vemos que a autocorrelação é truncada em 1, tanto para a parte sazonal quanto para a não sazonal. E além disso, a função de autocorrelação parcial decresce exponencialmente para ambas
   
   Sugerindo, assim, que o modelo a ser utilizado é um $SARIMA(0,1,1)\times(0,1,1)_{12}$
   
+## Ajuste de modelo SARIMA
+  
 ```{r }
-# aa <- diff(series)
-# plot(aa)
-# acf(aa)
-# pacf(aa)
-# acf(aa, lag = 60)
-# pacf(aa, lag = 60)
-# aa <- diff(aa, lag = 12)
-# plot(aa)
-# acf(aa, lag = 60)
-# pacf(aa, lag = 60)
-# parece ser esse modelo
 modelo <- arima(serie_sqrt, order = c(0,1,1), seasonal = list(order = c(0,1,1), period = 12))
+
+summary(modelo)
 ```
 
 ### Resíduos
@@ -167,24 +174,46 @@ plot(residuos)
 acf(residuos)
 ```
   
-  Ver essa autocorrelação significativa melhor
-
-### Previsão  
+  A função de autocorrelação dos resíduos apresenta um ponto fora do intervalo desejado, por isso é necessário fazer mais alguns ajustes para tratar desse problema.
+  
+## Novo ajuste
+  
+  A fim de tratar melhor a série transformada, ajustamos um $SARIMA(1,1,1)\times(0,1,1)_{12}$.
+  
 ```{r}
+modelo1 <- arima(serie_sqrt, order = c(1,1,1), seasonal = list(order = c(0,1,1), period = 12))
 
+summary(modelo1)
 ```
 
-### Previsao
-
+### Resíduos
 ```{r}
-# separei de 2017 em diante para previsao
+residuos <- residuals(modelo1)
+plot(residuos)
+```
+  
+  Os resíduos não apresentam indícios de heterocedasticidade.
+  
+```{r}
+acf(residuos)
+```
+  
+  A função de autocorrelação não apresenta nenhum valor significativo.
+  
+## Previsão
+
+  Separamos as observações de Janeiro de 2017 em diante para previsão, o que nos deixa com 30 valores para comparações posteriormente.
+  
+```{r}
 parcela_estimacao <- window(series, start = 1982, c(2016, 12))
-modelo <- arima(sqrt(parcela_estimacao), order = c(0,1,1), seasonal = list(order = c(0,1,1), period = 12))
-prev <- forecast(modelo)
+
+modelo1 <- arima(sqrt(parcela_estimacao), order = c(1,1,1), seasonal = list(order = c(0,1,1), period = 12))
+
+prev <- forecast(modelo1)
 plot(prev)
 ```
 
-#### Comparacao da previsao com os valores observados
+### Comparacão da previsão com os valores observados
 
 ```{r}
 valor_prev <- prev$mean^2
@@ -195,55 +224,104 @@ comparacao
 ```
 
 
-### MAPE
+### MAPE 
+
 ```{r}
 MLmetrics::MAPE(comparacao$valor_prev, comparacao$parcela_previsao)
+```
+
+```{r}
 mean((valor_prev - parcela_previsao)^2)
 ```
 
-### Residuos
-```{r}
-residuos <- residuals(modelo)
-plot(residuos)
-acf(residuos)
-```
-
-## Ajuste - Suavizacao exponencial de Holt-Winters 
+## Ajuste - Suavização exponencial de Holt-Winters 
 
 ```{r}
-modelo2 <- HoltWinters(parcela_estimacao) 
+modelo2 <- HoltWinters(sqrt(parcela_estimacao))
 
-plot(modelo2, main = "Ajuste do Modelo de Suavizacao exponencial de Holt-Winters")
+plot(modelo2, main = "Ajuste do Modelo de Suavização exponencial de Holt-Winters")
 ```
 
-### Previsao - Holt-Winters 
+### Previsão - Holt-Winters 
 
 ```{r}
 previsao <- forecast(modelo2)
 
-plot(previsao, main = "Previsao do modelo de Suavizacao exponencial de Holt-Winters")
+plot(previsao, main = "Previsão do modelo de Suavização exponencial de Holt-Winters")
 ```
 
-#### Comparacao da previsao com os valores observados
+### Comparação da previsão com os valores observados
 
 ```{r}
 val_prev <- previsao$mean
 val_real <- window(series, start = c(2017,1), c(2018, 12))
 
-comp <- cbind.data.frame(val_real,val_prev)
+comp <- cbind.data.frame(val_real,val_prev^2)
 comp
 ```
+
+### MAPE e Erro Quadrático Médio
+
 ```{r}
 MLmetrics::MAPE(val_prev, val_real)
 ```
-
-#### Residuos
+  
+```{r}
+mean((val_prev - val_real)^2)
+```
+  
+  Vemos que o MAPE é superior do que o ajustado pelo modelo sarima inicial proposto.
+  
+### Residuos
 
 ```{r}
 residuos <- residuals(modelo2)
 plot(residuos)
 acf(residuos)
 ```
+  
+  Vemos que os resíduos aparentam estar distribuídos aleatóriamente em torno do zero e sua função de autocorrelação apresenta dois valores significativos.
+  
+# Ajuste pelo auto.arima para série transformada
 
+  Para fins de comparação, ajustamos um modelo usando a função auto.arima para a série ajustada.
 
+```{r}
+modelo3 <- auto.arima(sqrt(parcela_estimacao))
+summary(modelo3)
+```
+ 
+## Comparações
 
+```{r}
+#modelo sarima inicial agora só com dados separados para estimação
+modelo <- arima(sqrt(parcela_estimacao), order = c(0,1,1), seasonal = list(order = c(0,1,1), period = 12))
+```
+
+```{r, include=F}
+err <- round(rbind.data.frame(summary(modelo)[3:6],summary(modelo1)[3:6], summary(modelo3)[3:6]) ,2)
+```
+```{r}
+colnames(err) <- c('MAE','MPE','MAPE','MASE')
+rownames(err) <- c('modelo','modelo1','modelo3')
+err
+```
+
+  Vemos que o modelo $SARIMA(1,1,1)\times(0,1,1)_{12}$ foi o que apresentou melhores resultados levando em conta todos dos erros acima avaliados.
+
+```{r}
+plot(forecast(modelo)$mean^2,type="l",col=1,xlim=c(2017,2019),
+     ylim=c(0,2000), ylab="", xlab="")
+par(new=T)
+plot(forecast(modelo1)$mean^2,type="l",col=2,xlim=c(2017,2019),
+     ylim=c(0,2000), ylab="",xlab="")
+par(new=T)
+plot(forecast(modelo2)$mean^2,type="l",col=3,xlim=c(2017,2019),
+     ylim=c(0,2000), ylab="", xlab="")
+par(new=T)
+plot(forecast(modelo3)$mean^2,type="l",col=4,xlim=c(2017,2019),
+     ylim=c(0,2000), ylab="Previsões", xlab="Tempo")
+
+```
+  
+  Podemos ver no gráfico acima que as previsões para os anos de 2017 e 2018 são bem próximas nos 4 modelos, sendo que o modelo ajustado pela função auto.arima (azul) é o que mais se destaca superiormente.
